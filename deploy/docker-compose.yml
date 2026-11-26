@@ -1,0 +1,61 @@
+# Runs the whole system locally: DynamoDB Local, Redis and two tinyurl instances.
+# Start it from the tinyurl folder with: docker compose -f deploy/docker-compose.yml up --build
+
+# Values shared by both tinyurl instances. "x-" keys are ignored by compose; the &common anchor lets us reuse the block below.
+x-tinyurl: &tinyurl
+  # Build the image from the Dockerfile. "context: .." is the tinyurl folder (one level above this file).
+  build:
+    context: ..
+    dockerfile: deploy/Dockerfile
+  # Settings read by the AWS library and by tinyurl.
+  environment:
+    # DynamoDB Local accepts any region and any keys, but the AWS library insists that they exist. No AWS account is used.
+    AWS_REGION: us-east-1
+    AWS_ACCESS_KEY_ID: local
+    AWS_SECRET_ACCESS_KEY: local
+    # API keys for create and delete, as key:owner pairs separated by commas. Change these for anything beyond local use.
+    TINYURL_API_KEYS: k1:alice,k2:bob
+  # Wait for the database and cache containers to start before starting tinyurl.
+  depends_on:
+    - dynamodb
+    - redis
+  # If tinyurl starts before DynamoDB Local is ready it exits; restarting it on failure gives the database time to come up.
+  restart: on-failure
+
+services:
+  # Local copy of DynamoDB. Nothing here talks to AWS.
+  dynamodb:
+    image: amazon/dynamodb-local
+    # -sharedDb: one database for all callers; -inMemory: nothing is written to disk, so data is gone when the container stops.
+    command: ["-jar", "DynamoDBLocal.jar", "-sharedDb", "-inMemory"]
+
+  # Cache shared by both tinyurl instances.
+  redis:
+    image: redis
+
+  # First tinyurl instance, reachable at http://localhost:8081.
+  tinyurl-1:
+    <<: *tinyurl
+    # -base-url is the address clients use, so short URLs in responses point at this instance's host port.
+    # -create-tables creates the DynamoDB tables if they are missing; both instances may do this, which is safe.
+    command:
+      - -base-url=http://localhost:8081
+      - -store=dynamodb
+      - -dynamodb-endpoint=http://dynamodb:8000
+      - -redis-addr=redis:6379
+      - -create-tables
+    # Map host port 8081 to the container's port 8080.
+    ports:
+      - "8081:8080"
+
+  # Second tinyurl instance, reachable at http://localhost:8082. It claims different id ranges from the shared counter, so codes never overlap.
+  tinyurl-2:
+    <<: *tinyurl
+    command:
+      - -base-url=http://localhost:8082
+      - -store=dynamodb
+      - -dynamodb-endpoint=http://dynamodb:8000
+      - -redis-addr=redis:6379
+      - -create-tables
+    ports:
+      - "8082:8080"

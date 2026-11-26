@@ -1,0 +1,84 @@
+# The tinyurl application: API keys, two replicas and a Service.
+# Build the image and load it into kind first:
+#   docker build -t tinyurl:latest -f deploy/Dockerfile .
+#   kind load docker-image tinyurl:latest
+
+# A Secret holds values that should not sit in the Deployment, such as API keys.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: tinyurl-keys
+# stringData lets us write plain text; Kubernetes stores it encoded. These keys are for local use only: change them for anything else.
+stringData:
+  # key:owner pairs separated by commas.
+  TINYURL_API_KEYS: "k1:alice,k2:bob"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tinyurl
+spec:
+  # Two copies, so a code created through one can be redirected by the other, and one can restart without downtime.
+  replicas: 2
+  selector:
+    matchLabels:
+      app: tinyurl
+  template:
+    metadata:
+      labels:
+        app: tinyurl
+    spec:
+      containers:
+        - name: tinyurl
+          # The image built above. IfNotPresent uses the copy loaded into kind instead of trying to download it.
+          image: tinyurl:latest
+          imagePullPolicy: IfNotPresent
+          # Flags for the tinyurl binary. -base-url matches the port-forward address used in the README.
+          # Both replicas pass -create-tables; creating a table that already exists is safe.
+          args:
+            - -base-url=http://localhost:8080
+            - -store=dynamodb
+            - -dynamodb-endpoint=http://dynamodb:8000
+            - -redis-addr=redis:6379
+            - -create-tables
+          # Environment variables for the container.
+          env:
+            # DynamoDB Local accepts any region and keys, but the AWS library requires them. No AWS account is used.
+            - name: AWS_REGION
+              value: us-east-1
+            - name: AWS_ACCESS_KEY_ID
+              value: local
+            - name: AWS_SECRET_ACCESS_KEY
+              value: local
+          # Also load every entry of the Secret above as an environment variable (TINYURL_API_KEYS).
+          envFrom:
+            - secretRef:
+                name: tinyurl-keys
+          # Port the server listens on.
+          ports:
+            - containerPort: 8080
+          # Ready check: a pod only receives traffic once something accepts connections on port 8080. There is no health endpoint, so a TCP check is used.
+          readinessProbe:
+            tcpSocket:
+              port: 8080
+          # Alive check: if nothing accepts connections on port 8080 for a while, Kubernetes restarts the pod.
+          livenessProbe:
+            tcpSocket:
+              port: 8080
+            # Give the server time to start before the first check.
+            initialDelaySeconds: 5
+---
+# ClusterIP Service: a stable address inside the cluster that spreads requests over both tinyurl pods.
+apiVersion: v1
+kind: Service
+metadata:
+  name: tinyurl
+spec:
+  type: ClusterIP
+  # Send traffic to pods with this label.
+  selector:
+    app: tinyurl
+  # Service port 80 forwards to container port 8080. From your laptop use: kubectl port-forward svc/tinyurl 8080:80
+  ports:
+    - port: 80
+      targetPort: 8080

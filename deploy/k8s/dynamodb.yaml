@@ -1,0 +1,45 @@
+# DynamoDB Local for a local cluster (such as kind). One copy only, and data is lost when the pod restarts.
+
+# A Deployment keeps the requested number of pods running and restarts them if they fail.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  # Name of this Deployment.
+  name: dynamodb
+spec:
+  # A single copy: DynamoDB Local keeps its data in memory, so more copies would not share it.
+  replicas: 1
+  # Which pods belong to this Deployment: those carrying this label.
+  selector:
+    matchLabels:
+      app: dynamodb
+  # The pod to create.
+  template:
+    metadata:
+      # Label that the selector above and the Service below look for.
+      labels:
+        app: dynamodb
+    spec:
+      containers:
+        - name: dynamodb
+          # Public image with a local DynamoDB; no AWS account needed.
+          image: amazon/dynamodb-local
+          # -sharedDb: one database for all callers; -inMemory: nothing is written to disk.
+          args: ["-jar", "DynamoDBLocal.jar", "-sharedDb", "-inMemory"]
+          # Port the container listens on.
+          ports:
+            - containerPort: 8000
+---
+# A Service gives the pod a stable name inside the cluster: tinyurl reaches it at http://dynamodb:8000.
+apiVersion: v1
+kind: Service
+metadata:
+  name: dynamodb
+spec:
+  # Send traffic to pods with this label.
+  selector:
+    app: dynamodb
+  # Service port 8000 forwards to container port 8000.
+  ports:
+    - port: 8000
+      targetPort: 8000

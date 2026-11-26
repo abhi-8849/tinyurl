@@ -31,7 +31,9 @@ func EnsureTable(ctx context.Context, client *dynamodb.Client, table, hashKey st
 		AttributeDefinitions: []types.AttributeDefinition{{AttributeName: aws.String(hashKey), AttributeType: types.ScalarAttributeTypeS}},
 		KeySchema:            []types.KeySchemaElement{{AttributeName: aws.String(hashKey), KeyType: types.KeyTypeHash}},
 	})
-	if err != nil {
+	var inUse *types.ResourceInUseException
+	// Another instance starting at the same time may have created the table first; that is fine, we only need it to exist.
+	if err != nil && !errors.As(err, &inUse) {
 		return fmt.Errorf("create table %s: %w", table, err)
 	}
 	waiter := dynamodb.NewTableExistsWaiter(client)
