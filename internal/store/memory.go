@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"sync"
+	"time"
 )
 
 // MemoryRepository is a Repository held in process memory. It serves a single instance and loses its data on restart.
@@ -36,4 +37,17 @@ func (r *MemoryRepository) Get(_ context.Context, code string) (Mapping, error) 
 		return Mapping{}, ErrNotFound
 	}
 	return m, nil
+}
+
+// MarkDeleted records the deletion time of code, or returns ErrNotFound.
+func (r *MemoryRepository) MarkDeleted(_ context.Context, code string, at time.Time) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	m, ok := r.m[code]
+	if !ok {
+		return ErrNotFound
+	}
+	m.DeletedAt = &at
+	r.m[code] = m
+	return nil
 }

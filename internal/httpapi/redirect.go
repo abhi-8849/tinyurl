@@ -13,6 +13,10 @@ func (s *Server) redirect(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	if errors.Is(err, redirect.ErrDeleted) {
+		http.Error(w, "link deleted", http.StatusGone)
+		return
+	}
 	if errors.Is(err, redirect.ErrExpired) {
 		http.Error(w, "link expired", http.StatusGone)
 		return

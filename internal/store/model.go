@@ -19,6 +19,7 @@ type Mapping struct {
 	OwnerID   string
 	CreatedAt time.Time
 	ExpiresAt time.Time
+	DeletedAt *time.Time // set when the owner deletes the link; the row is kept so the code is never reissued
 }
 
 // Repository persists mappings. Implementations must make Insert fail with ErrConflict instead of overwriting,
@@ -26,4 +27,6 @@ type Mapping struct {
 type Repository interface {
 	Insert(ctx context.Context, m Mapping) error
 	Get(ctx context.Context, code string) (Mapping, error)
+	// MarkDeleted sets DeletedAt and returns ErrNotFound if the code does not exist.
+	MarkDeleted(ctx context.Context, code string, at time.Time) error
 }

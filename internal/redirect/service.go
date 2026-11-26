@@ -12,6 +12,9 @@ import (
 // ErrNotFound means no link exists for the code.
 var ErrNotFound = errors.New("redirect: code not found")
 
+// ErrDeleted means the owner deleted the link.
+var ErrDeleted = errors.New("redirect: link deleted")
+
 // ErrExpired means the link existed but its expiry time has passed.
 var ErrExpired = errors.New("redirect: link expired")
 
@@ -31,7 +34,7 @@ func NewService(repo store.Repository, clock Clock) *Service {
 	return &Service{repo: repo, clock: clock}
 }
 
-// Resolve returns the long URL for code, or ErrNotFound or ErrExpired.
+// Resolve returns the long URL for code, ErrNotFound, ErrDeleted or ErrExpired.
 func (s *Service) Resolve(ctx context.Context, code string) (string, error) {
 	m, err := s.repo.Get(ctx, code)
 	if errors.Is(err, store.ErrNotFound) {
@@ -39,6 +42,9 @@ func (s *Service) Resolve(ctx context.Context, code string) (string, error) {
 	}
 	if err != nil {
 		return "", fmt.Errorf("resolve %s: %w", code, err)
+	}
+	if m.DeletedAt != nil {
+		return "", ErrDeleted
 	}
 	if !s.clock.Now().Before(m.ExpiresAt) {
 		return "", ErrExpired

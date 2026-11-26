@@ -24,6 +24,7 @@ type Clock interface {
 type CreateRequest struct {
 	LongURL   string
 	Alias     string // optional; replaces the generated code
+	OwnerID   string // who may delete the link
 	ExpiresAt time.Time
 }
 
@@ -56,7 +57,7 @@ func (s *Service) Create(ctx context.Context, req CreateRequest) (store.Mapping,
 	if expires.IsZero() {
 		expires = now.Add(s.defaultTTL)
 	}
-	m := store.Mapping{Code: code, LongURL: req.LongURL, CreatedAt: now, ExpiresAt: expires}
+	m := store.Mapping{Code: code, LongURL: req.LongURL, OwnerID: req.OwnerID, CreatedAt: now, ExpiresAt: expires}
 	if err := s.repo.Insert(ctx, m); errors.Is(err, store.ErrConflict) {
 		// The conditional insert is what decides uniqueness, so two requests racing for one alias cannot both win.
 		return store.Mapping{}, ErrAliasTaken

@@ -14,6 +14,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/abhi-8849/system-design/tinyurl/internal/auth"
 	"github.com/abhi-8849/system-design/tinyurl/internal/httpapi"
 	"github.com/abhi-8849/system-design/tinyurl/internal/idgen"
 	"github.com/abhi-8849/system-design/tinyurl/internal/redirect"
@@ -29,6 +30,7 @@ type config struct {
 	baseURL    *url.URL
 	defaultTTL time.Duration
 	rangeSize  uint64
+	apiKeys    string // from TINYURL_API_KEYS, "key:owner,..."; never logged
 }
 
 type systemClock struct{}
@@ -64,14 +66,19 @@ func parseConfig(args []string) (config, error) {
 		return config{}, errors.New("-range-size must be above zero")
 	}
 	c.baseURL = u
+	c.apiKeys = os.Getenv("TINYURL_API_KEYS")
 	return c, nil
 }
 
-func newHandler(c config, log *slog.Logger) http.Handler {
+func newHandler(c config, log *slog.Logger) (http.Handler, error) {
+	keys, err := auth.NewAPIKeys(c.apiKeys)
+	if err != nil {
+		return nil, fmt.Errorf("TINYURL_API_KEYS: %w", err)
+	}
 	repo := store.NewMemoryRepository()
 	gen := idgen.NewGenerator(idgen.WithLogging(idgen.NewMemoryAllocator(), log), c.rangeSize)
 	creator := shorten.NewService(repo, gen, systemClock{}, c.baseURL.Host, c.defaultTTL)
-	return httpapi.NewServer(creator, redirect.NewService(repo, systemClock{}), c.baseURL.String(), log).Handler()
+	return httpapi.NewServer(keys, creator, redirect.NewService(repo, systemClock{}), c.baseURL.String(), log).Handler(), nil
 }
 
 func run(ctx context.Context, args []string, log *slog.Logger) error {
@@ -79,7 +86,11 @@ func run(ctx context.Context, args []string, log *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	srv := &http.Server{Addr: c.addr, Handler: newHandler(c, log), ReadHeaderTimeout: 5 * time.Second}
+	h, err := newHandler(c, log)
+	if err != nil {
+		return err
+	}
+	srv := &http.Server{Addr: c.addr, Handler: h, ReadHeaderTimeout: 5 * time.Second}
 
 	// Goroutine owner: run. It stops when srv.Shutdown (or a listen failure) makes ListenAndServe return. It is the only sender and
 	// sends exactly once; run is the only receiver. The channel is never closed. Capacity 1 lets the send finish even if run has

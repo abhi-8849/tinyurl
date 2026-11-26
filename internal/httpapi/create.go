@@ -25,12 +25,17 @@ type createResponse struct {
 }
 
 func (s *Server) create(w http.ResponseWriter, r *http.Request) {
+	owner, err := s.auth.Owner(r)
+	if err != nil {
+		http.Error(w, "missing or unknown API key", http.StatusUnauthorized)
+		return
+	}
 	var req createRequest
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBodyBytes)).Decode(&req); err != nil {
 		http.Error(w, "invalid JSON body", http.StatusBadRequest)
 		return
 	}
-	sr := shorten.CreateRequest{LongURL: req.LongURL, Alias: req.Alias}
+	sr := shorten.CreateRequest{LongURL: req.LongURL, Alias: req.Alias, OwnerID: owner}
 	if req.ExpiresAt != nil {
 		sr.ExpiresAt = *req.ExpiresAt
 	}
