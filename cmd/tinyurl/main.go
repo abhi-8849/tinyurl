@@ -71,7 +71,7 @@ func newHandler(c config, log *slog.Logger) http.Handler {
 	repo := store.NewMemoryRepository()
 	gen := idgen.NewGenerator(idgen.WithLogging(idgen.NewMemoryAllocator(), log), c.rangeSize)
 	creator := shorten.NewService(repo, gen, systemClock{}, c.baseURL.Host, c.defaultTTL)
-	return httpapi.NewServer(creator, redirect.NewService(repo), c.baseURL.String(), log).Handler()
+	return httpapi.NewServer(creator, redirect.NewService(repo, systemClock{}), c.baseURL.String(), log).Handler()
 }
 
 func run(ctx context.Context, args []string, log *slog.Logger) error {

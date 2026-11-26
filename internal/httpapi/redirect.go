@@ -13,6 +13,10 @@ func (s *Server) redirect(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	if errors.Is(err, redirect.ErrExpired) {
+		http.Error(w, "link expired", http.StatusGone)
+		return
+	}
 	if err != nil {
 		s.log.Error("resolve failed", "error", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)

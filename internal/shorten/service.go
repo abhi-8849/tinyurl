@@ -19,8 +19,10 @@ type Clock interface {
 }
 
 // CreateRequest is the input to Create.
+// ExpiresAt is optional; the zero value means "use the default lifetime".
 type CreateRequest struct {
-	LongURL string
+	LongURL   string
+	ExpiresAt time.Time
 }
 
 // Service creates short links.
@@ -47,7 +49,11 @@ func (s *Service) Create(ctx context.Context, req CreateRequest) (store.Mapping,
 		return store.Mapping{}, fmt.Errorf("create: %w", err)
 	}
 	now := s.clock.Now()
-	m := store.Mapping{Code: code, LongURL: req.LongURL, CreatedAt: now, ExpiresAt: now.Add(s.defaultTTL)}
+	expires := req.ExpiresAt
+	if expires.IsZero() {
+		expires = now.Add(s.defaultTTL)
+	}
+	m := store.Mapping{Code: code, LongURL: req.LongURL, CreatedAt: now, ExpiresAt: expires}
 	if err := s.repo.Insert(ctx, m); err != nil {
 		return store.Mapping{}, fmt.Errorf("create %s: %w", code, err)
 	}
