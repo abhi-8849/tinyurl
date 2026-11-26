@@ -14,7 +14,8 @@ const maxBodyBytes = 8 << 10
 
 type createRequest struct {
 	LongURL   string     `json:"long_url"`
-	ExpiresAt *time.Time `json:"expires_at"` // optional; RFC 3339
+	Alias     string     `json:"custom_alias"` // optional
+	ExpiresAt *time.Time `json:"expires_at"`   // optional; RFC 3339
 }
 
 type createResponse struct {
@@ -29,13 +30,17 @@ func (s *Server) create(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid JSON body", http.StatusBadRequest)
 		return
 	}
-	sr := shorten.CreateRequest{LongURL: req.LongURL}
+	sr := shorten.CreateRequest{LongURL: req.LongURL, Alias: req.Alias}
 	if req.ExpiresAt != nil {
 		sr.ExpiresAt = *req.ExpiresAt
 	}
 	m, err := s.shortener.Create(r.Context(), sr)
-	if errors.Is(err, shorten.ErrInvalidURL) {
+	if errors.Is(err, shorten.ErrInvalidURL) || errors.Is(err, shorten.ErrInvalidAlias) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if errors.Is(err, shorten.ErrAliasTaken) {
+		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	}
 	if err != nil {
