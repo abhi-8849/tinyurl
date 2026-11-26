@@ -36,6 +36,7 @@ type config struct {
 	store      string // memory or dynamodb
 	endpoint   string // DynamoDB endpoint; empty means real AWS
 	table      string
+	counterTbl string
 	createTbls bool
 	redisAddr  string // empty means an in-memory cache
 	apiKeys    string // from TINYURL_API_KEYS, "key:owner,..."; never logged
@@ -65,6 +66,7 @@ func parseConfig(args []string) (config, error) {
 	fs.StringVar(&c.store, "store", "memory", "link storage: memory or dynamodb")
 	fs.StringVar(&c.endpoint, "dynamodb-endpoint", "", "DynamoDB endpoint, set for DynamoDB Local")
 	fs.StringVar(&c.table, "table", "url_mapping", "DynamoDB table for links")
+	fs.StringVar(&c.counterTbl, "counter-table", "id_counter", "DynamoDB table for the id counter")
 	fs.BoolVar(&c.createTbls, "create-tables", false, "create the DynamoDB table if it is missing")
 	fs.StringVar(&c.redisAddr, "redis-addr", "", "Redis address for the cache; empty uses an in-memory cache")
 	fs.Uint64Var(&c.rangeSize, "range-size", 1_000_000, "ids claimed from the allocator at a time")
@@ -86,14 +88,14 @@ func parseConfig(args []string) (config, error) {
 	return c, nil
 }
 
-func newHandler(c config, repo store.Repository, cch cache.Cache, log *slog.Logger) (http.Handler, error) {
+func newHandler(c config, repo store.Repository, alloc idgen.Allocator, cch cache.Cache, log *slog.Logger) (http.Handler, error) {
 	keys, err := auth.NewAPIKeys(c.apiKeys)
 	if err != nil {
 		return nil, fmt.Errorf("TINYURL_API_KEYS: %w", err)
 	}
 	m := metrics.New()
 	clock := systemClock{}
-	alloc := idgen.WithLogging(idgen.WithObserver(idgen.NewMemoryAllocator(), m), log)
+	alloc = idgen.WithLogging(idgen.WithObserver(alloc, m), log)
 	creator := shorten.NewService(shorten.Deps{
 		Repo: repo, Gen: idgen.NewGenerator(alloc, c.rangeSize), Cache: cch, Clock: clock, Observer: m, Log: log,
 		OwnHost: c.baseURL.Host, DefaultTTL: c.defaultTTL,
@@ -107,7 +109,7 @@ func run(ctx context.Context, args []string, log *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	repo, err := newRepo(ctx, c)
+	repo, alloc, err := newBackend(ctx, c)
 	if err != nil {
 		return err
 	}
@@ -115,7 +117,7 @@ func run(ctx context.Context, args []string, log *slog.Logger) error {
 	if closer, ok := cch.(io.Closer); ok {
 		defer closer.Close()
 	}
-	h, err := newHandler(c, repo, cch, log)
+	h, err := newHandler(c, repo, alloc, cch, log)
 	if err != nil {
 		return err
 	}
@@ -143,21 +145,23 @@ func run(ctx context.Context, args []string, log *slog.Logger) error {
 	return nil
 }
 
-// newRepo returns the repository chosen by -store, creating the table first when -create-tables is set.
-func newRepo(ctx context.Context, c config) (store.Repository, error) {
+// newBackend returns the repository and id allocator chosen by -store. With DynamoDB both tables are created first when -create-tables is set.
+func newBackend(ctx context.Context, c config) (store.Repository, idgen.Allocator, error) {
 	if c.store == "memory" {
-		return store.NewMemoryRepository(), nil
+		return store.NewMemoryRepository(), idgen.NewMemoryAllocator(), nil
 	}
 	client, err := store.NewDynamoDBClient(ctx, c.endpoint)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if c.createTbls {
-		if err := store.EnsureTable(ctx, client, c.table, "code"); err != nil {
-			return nil, err
+		for _, t := range []struct{ name, key string }{{c.table, "code"}, {c.counterTbl, "name"}} {
+			if err := store.EnsureTable(ctx, client, t.name, t.key); err != nil {
+				return nil, nil, err
+			}
 		}
 	}
-	return store.NewDynamoDBRepository(client, c.table), nil
+	return store.NewDynamoDBRepository(client, c.table), idgen.NewDynamoDBAllocator(client, c.counterTbl), nil
 }
 
 // newCache returns Redis when -redis-addr is set, otherwise a cache local to this process.
