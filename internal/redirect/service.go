@@ -88,21 +88,26 @@ func (s *Service) load(ctx context.Context, code string) (store.Mapping, string,
 	if err == nil {
 		return m, ResultCacheHit, nil
 	}
-	if !errors.Is(err, cache.ErrMiss) {
+	// After a real cache failure the fill is skipped: the cache is down, and a second call would only double the wait.
+	cacheUp := errors.Is(err, cache.ErrMiss)
+	if !cacheUp {
 		s.cacheFailed("get", code, err)
 	}
-	m, err = s.fromStore(ctx, code)
+	m, err = s.fromStore(ctx, code, cacheUp)
 	return m, ResultStoreHit, err
 }
 
 // fromStore reads one code from the store and fills the cache. Concurrent callers for the same code share one read, so a popular
 // code that just fell out of the cache does not stampede the store. The first caller's ctx is used for all of them. No goroutine is
 // started here: singleflight runs the read in the calling goroutine and makes the others wait for its result.
-func (s *Service) fromStore(ctx context.Context, code string) (store.Mapping, error) {
+func (s *Service) fromStore(ctx context.Context, code string, fill bool) (store.Mapping, error) {
 	v, err, _ := s.group.Do(code, func() (any, error) {
 		m, err := s.d.Repo.Get(ctx, code)
 		if err != nil {
 			return store.Mapping{}, err
+		}
+		if !fill {
+			return m, nil
 		}
 		if err := s.d.Cache.Set(ctx, m); err != nil {
 			s.cacheFailed("set", code, err)
