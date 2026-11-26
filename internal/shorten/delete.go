@@ -18,7 +18,7 @@ var (
 // Delete marks the owner's link as deleted. Deleting an already deleted link succeeds, so a retry is safe.
 // The row stays, so the code can never be issued again.
 func (s *Service) Delete(ctx context.Context, ownerID, code string) error {
-	m, err := s.repo.Get(ctx, code)
+	m, err := s.d.Repo.Get(ctx, code)
 	if errors.Is(err, store.ErrNotFound) {
 		return ErrNotFound
 	}
@@ -31,8 +31,13 @@ func (s *Service) Delete(ctx context.Context, ownerID, code string) error {
 	if m.DeletedAt != nil {
 		return nil
 	}
-	if err := s.repo.MarkDeleted(ctx, code, s.clock.Now()); err != nil && !errors.Is(err, store.ErrNotFound) {
+	if err := s.d.Repo.MarkDeleted(ctx, code, s.d.Clock.Now()); err != nil && !errors.Is(err, store.ErrNotFound) {
 		return fmt.Errorf("delete %s: %w", code, err)
 	}
+	if err := s.d.Cache.Delete(ctx, code); err != nil {
+		s.d.Observer.CacheError()
+		s.d.Log.Warn("cache delete failed", "code", code, "error", err)
+	}
+	s.d.Observer.Deleted()
 	return nil
 }

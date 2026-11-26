@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/abhi-8849/system-design/tinyurl/internal/shorten"
 	"github.com/abhi-8849/system-design/tinyurl/internal/store"
@@ -26,18 +27,25 @@ type Resolver interface {
 	Resolve(ctx context.Context, code string) (string, error)
 }
 
+// Metrics serves /metrics and times redirects; metrics.Metrics satisfies it.
+type Metrics interface {
+	Handler() http.Handler
+	RedirectDuration(d time.Duration)
+}
+
 // Server maps HTTP requests onto the services and their errors onto status codes.
 type Server struct {
 	auth      Authenticator
 	shortener Shortener
 	resolver  Resolver
+	metrics   Metrics
 	baseURL   string
 	log       *slog.Logger
 }
 
 // NewServer returns a Server. baseURL is the public address that short URLs in responses start with.
-func NewServer(a Authenticator, s Shortener, r Resolver, baseURL string, log *slog.Logger) *Server {
-	return &Server{auth: a, shortener: s, resolver: r, baseURL: strings.TrimRight(baseURL, "/"), log: log}
+func NewServer(a Authenticator, s Shortener, r Resolver, m Metrics, baseURL string, log *slog.Logger) *Server {
+	return &Server{auth: a, shortener: s, resolver: r, metrics: m, baseURL: strings.TrimRight(baseURL, "/"), log: log}
 }
 
 // Handler returns the routes. A GET pattern also answers HEAD, so `curl -I` works.
@@ -46,5 +54,6 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/v1/urls", s.create)
 	mux.HandleFunc("DELETE /api/v1/urls/{code}", s.delete)
 	mux.HandleFunc("GET /{code}", s.redirect)
-	return mux
+	mux.Handle("GET /metrics", s.metrics.Handler())
+	return s.logRequests(mux)
 }

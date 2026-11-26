@@ -3,11 +3,14 @@ package httpapi
 import (
 	"errors"
 	"net/http"
+	"time"
 
 	"github.com/abhi-8849/system-design/tinyurl/internal/redirect"
 )
 
 func (s *Server) redirect(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
+	defer func() { s.metrics.RedirectDuration(time.Since(start)) }()
 	url, err := s.resolver.Resolve(r.Context(), r.PathValue("code"))
 	if errors.Is(err, redirect.ErrNotFound) {
 		http.NotFound(w, r)

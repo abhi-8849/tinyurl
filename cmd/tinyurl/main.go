@@ -15,8 +15,10 @@ import (
 	"time"
 
 	"github.com/abhi-8849/system-design/tinyurl/internal/auth"
+	"github.com/abhi-8849/system-design/tinyurl/internal/cache"
 	"github.com/abhi-8849/system-design/tinyurl/internal/httpapi"
 	"github.com/abhi-8849/system-design/tinyurl/internal/idgen"
+	"github.com/abhi-8849/system-design/tinyurl/internal/metrics"
 	"github.com/abhi-8849/system-design/tinyurl/internal/redirect"
 	"github.com/abhi-8849/system-design/tinyurl/internal/shorten"
 	"github.com/abhi-8849/system-design/tinyurl/internal/store"
@@ -75,10 +77,17 @@ func newHandler(c config, log *slog.Logger) (http.Handler, error) {
 	if err != nil {
 		return nil, fmt.Errorf("TINYURL_API_KEYS: %w", err)
 	}
+	m := metrics.New()
+	clock := systemClock{}
 	repo := store.NewMemoryRepository()
-	gen := idgen.NewGenerator(idgen.WithLogging(idgen.NewMemoryAllocator(), log), c.rangeSize)
-	creator := shorten.NewService(repo, gen, systemClock{}, c.baseURL.Host, c.defaultTTL)
-	return httpapi.NewServer(keys, creator, redirect.NewService(repo, systemClock{}), c.baseURL.String(), log).Handler(), nil
+	cch := cache.NewMemoryCache(clock)
+	alloc := idgen.WithLogging(idgen.WithObserver(idgen.NewMemoryAllocator(), m), log)
+	creator := shorten.NewService(shorten.Deps{
+		Repo: repo, Gen: idgen.NewGenerator(alloc, c.rangeSize), Cache: cch, Clock: clock, Observer: m, Log: log,
+		OwnHost: c.baseURL.Host, DefaultTTL: c.defaultTTL,
+	})
+	resolver := redirect.NewService(redirect.Deps{Repo: repo, Cache: cch, Clock: clock, Observer: m, Log: log})
+	return httpapi.NewServer(keys, creator, resolver, m, c.baseURL.String(), log).Handler(), nil
 }
 
 func run(ctx context.Context, args []string, log *slog.Logger) error {
