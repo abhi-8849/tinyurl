@@ -32,6 +32,10 @@ type config struct {
 	baseURL    *url.URL
 	defaultTTL time.Duration
 	rangeSize  uint64
+	store      string // memory or dynamodb
+	endpoint   string // DynamoDB endpoint; empty means real AWS
+	table      string
+	createTbls bool
 	apiKeys    string // from TINYURL_API_KEYS, "key:owner,..."; never logged
 }
 
@@ -56,6 +60,10 @@ func parseConfig(args []string) (config, error) {
 	base := fs.String("base-url", "http://localhost:8080", "public address that short URLs start with")
 	fs.StringVar(&c.addr, "addr", ":8080", "listen address")
 	fs.DurationVar(&c.defaultTTL, "default-ttl", 43800*time.Hour, "lifetime of a link with no expiry of its own")
+	fs.StringVar(&c.store, "store", "memory", "link storage: memory or dynamodb")
+	fs.StringVar(&c.endpoint, "dynamodb-endpoint", "", "DynamoDB endpoint, set for DynamoDB Local")
+	fs.StringVar(&c.table, "table", "url_mapping", "DynamoDB table for links")
+	fs.BoolVar(&c.createTbls, "create-tables", false, "create the DynamoDB table if it is missing")
 	fs.Uint64Var(&c.rangeSize, "range-size", 1_000_000, "ids claimed from the allocator at a time")
 	if err := fs.Parse(args); err != nil {
 		return config{}, err
@@ -63,6 +71,9 @@ func parseConfig(args []string) (config, error) {
 	u, err := url.Parse(*base)
 	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
 		return config{}, fmt.Errorf("invalid -base-url %q", *base)
+	}
+	if c.store != "memory" && c.store != "dynamodb" {
+		return config{}, fmt.Errorf("invalid -store %q: want memory or dynamodb", c.store)
 	}
 	if c.rangeSize == 0 {
 		return config{}, errors.New("-range-size must be above zero")
@@ -72,14 +83,13 @@ func parseConfig(args []string) (config, error) {
 	return c, nil
 }
 
-func newHandler(c config, log *slog.Logger) (http.Handler, error) {
+func newHandler(c config, repo store.Repository, log *slog.Logger) (http.Handler, error) {
 	keys, err := auth.NewAPIKeys(c.apiKeys)
 	if err != nil {
 		return nil, fmt.Errorf("TINYURL_API_KEYS: %w", err)
 	}
 	m := metrics.New()
 	clock := systemClock{}
-	repo := store.NewMemoryRepository()
 	cch := cache.NewMemoryCache(clock)
 	alloc := idgen.WithLogging(idgen.WithObserver(idgen.NewMemoryAllocator(), m), log)
 	creator := shorten.NewService(shorten.Deps{
@@ -95,7 +105,11 @@ func run(ctx context.Context, args []string, log *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	h, err := newHandler(c, log)
+	repo, err := newRepo(ctx, c)
+	if err != nil {
+		return err
+	}
+	h, err := newHandler(c, repo, log)
 	if err != nil {
 		return err
 	}
@@ -121,4 +135,21 @@ func run(ctx context.Context, args []string, log *slog.Logger) error {
 	<-errc // Waits for the serving goroutine to exit; it reports http.ErrServerClosed, which is the normal result.
 	log.Info("tinyurl stopped")
 	return nil
+}
+
+// newRepo returns the repository chosen by -store, creating the table first when -create-tables is set.
+func newRepo(ctx context.Context, c config) (store.Repository, error) {
+	if c.store == "memory" {
+		return store.NewMemoryRepository(), nil
+	}
+	client, err := store.NewDynamoDBClient(ctx, c.endpoint)
+	if err != nil {
+		return nil, err
+	}
+	if c.createTbls {
+		if err := store.EnsureTable(ctx, client, c.table, "code"); err != nil {
+			return nil, err
+		}
+	}
+	return store.NewDynamoDBRepository(client, c.table), nil
 }
